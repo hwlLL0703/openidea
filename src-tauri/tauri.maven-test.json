@@ -1,0 +1,12 @@
+{
+  "productName": "OpenIDEA Maven Test",
+  "identifier": "ai.l0ng.openidea.maven2884",
+  "bundle": {
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    }
+  }
+}
