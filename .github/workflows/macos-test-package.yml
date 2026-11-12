@@ -1,0 +1,146 @@
+name: macOS test package
+
+# Unsigned test DMGs for the Maven external-import branch. Workflow artifacts only:
+# this file does not create a tag or a GitHub release.
+#
+# The overlay gives the bundle its own name and identifier, so its settings, data
+# and logs are not the installed app's. Plugin keychain items stay shared
+# (service ai.l0ng.openidea.plugin.<id>); do not change plugin secrets in the test app.
+#
+# Discoverable import: File › Project Structure… › Modules › Import Module from Existing Sources
+# (导入已有模块). Add Module Overrides stays an in-project settings action.
+# The Maven tool window plus button remains Add Maven Projects (添加 Maven 项目).
+on:
+  workflow_dispatch:
+  push:
+    branches: [cursor/maven-external-import-35d1]
+    paths:
+      - .github/workflows/macos-test-package.yml
+      - src-tauri/tauri.maven-test.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-test-package-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  package:
+    name: DMG (${{ matrix.arch }})
+    runs-on: macos-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: x64
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with: { version: 11 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+      - uses: Swatinem/rust-cache@v2
+        with: { key: "maven-test-${{ matrix.target }}" }
+      - run: pnpm install --frozen-lockfile
+      - name: Build unsigned test app
+        run: >-
+          pnpm exec tauri build --ci --no-sign
+          --target ${{ matrix.target }}
+          --config src-tauri/tauri.maven-test.json
+      - name: Check bundle identity and architecture
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          arch="${{ matrix.arch }}"
+          bundle="target/${target}/release/bundle"
+          apps=("${bundle}"/macos/*.app)
+          if [ "${#apps[@]}" -ne 1 ] || [ ! -d "${apps[0]}" ]; then
+            echo "expected one .app under ${bundle}/macos"
+            ls -la "${bundle}/macos" || true
+            exit 1
+          fi
+          app="${apps[0]}"
+          base="$(basename "$app")"
+          info="${app}/Contents/Info.plist"
+          id="$(plutil -extract CFBundleIdentifier raw "$info")"
+          name="$(plutil -extract CFBundleName raw "$info")"
+          exe="$(plutil -extract CFBundleExecutable raw "$info")"
+          bin="${app}/Contents/MacOS/${exe}"
+          if [ "$base" != "OpenIDEA Maven Test.app" ]; then
+            echo "unexpected app name: $base"
+            exit 1
+          fi
+          if [ "$id" != "ai.l0ng.openidea.maven2884" ]; then
+            echo "unexpected bundle identifier: $id"
+            exit 1
+          fi
+          if [ "$name" != "OpenIDEA Maven Test" ]; then
+            echo "unexpected CFBundleName: $name"
+            exit 1
+          fi
+          if [ "$id" = "ai.l0ng.openidea" ]; then
+            echo "test bundle uses the production identifier"
+            exit 1
+          fi
+          kind="$(file -b "$bin")"
+          case "$kind" in
+            Mach-O\ *) ;;
+            *) echo "not a Mach-O binary: $kind"; exit 1 ;;
+          esac
+          got="$(lipo -archs "$bin")"
+          case "$arch" in
+            arm64) expect="arm64" ;;
+            x64) expect="x86_64" ;;
+            *) echo "unknown arch $arch"; exit 1 ;;
+          esac
+          if [ "$got" != "$expect" ]; then
+            echo "expected architecture $expect, lipo reports $got"
+            exit 1
+          fi
+          if find "$bundle" \( -name '*.sig' -o -name 'latest.json' \) | grep -q .; then
+            echo "updater artifacts were produced"
+            find "$bundle" \( -name '*.sig' -o -name 'latest.json' \)
+            exit 1
+          fi
+          dmgs=("${bundle}"/dmg/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ] || [ ! -f "${dmgs[0]}" ]; then
+            echo "expected one dmg"
+            exit 1
+          fi
+          shasum -a 256 "${dmgs[0]}" | tee checksums.txt
+          {
+            echo "app=$base"
+            echo "identifier=$id"
+            echo "bundle_name=$name"
+            echo "executable=$exe"
+            echo "lipo=$got"
+            echo "file=$kind"
+            echo "dmg=$(basename "${dmgs[0]}")"
+            echo "config=\$HOME/Library/Application Support/$id"
+            echo "data=\$HOME/Library/Application Support/$id"
+            echo "logs=\$HOME/Library/Logs/$id"
+            echo "production_config=\$HOME/Library/Application Support/ai.l0ng.openidea"
+            echo "plugin_keychain=ai.l0ng.openidea.plugin.<plugin id> (shared with the installed app; do not change plugin secrets)"
+          } | tee identity.txt
+          mkdir -p "$RUNNER_TEMP/maven-test-dist"
+          cp "${dmgs[0]}" checksums.txt identity.txt "$RUNNER_TEMP/maven-test-dist/"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: OpenIDEA-Maven-Test-macos-${{ matrix.arch }}
+          path: ${{ runner.temp }}/maven-test-dist/
+          retention-days: 14
+          if-no-files-found: error
