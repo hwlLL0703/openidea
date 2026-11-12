@@ -931,6 +931,8 @@ export const commands = {
 	jdkDownloadReleases: (vendor: string, request: RequestId) => typedError<JdkReleases, IdeError>(__TAURI_INVOKE("jdk_download_releases", { vendor, request })),
 	/**  Where Download JDK puts JDKs unless told otherwise. */
 	jdkDownloadLocation: () => typedError<IpcPath, IdeError>(__TAURI_INVOKE("jdk_download_location")),
+	/**  The Java version the window's jdtls needs; `None` while it isn't installed or doesn't tell. */
+	jdtlsRequiredJava: () => typedError<number | null, IdeError>(__TAURI_INVOKE("jdtls_required_java")),
 	/**
 	 *  Downloads the latest `vendor` JDK of Java `version` into `location` (default:
 	 *  [`jdk_download_location`]), streaming progress through `on_event`; cancellable
@@ -3126,6 +3128,8 @@ export type ConsoleSettings = {
 	encoding?: string,
 	/**  Consecutive lines containing any of these are folded. */
 	foldPatterns?: string[],
+	/**  Log lines take the colour of their level (Run/Debug consoles). */
+	logColors?: LogLevelColors,
 };
 
 export type ContainerOp = "start" | "stop" | "restart" | "pause" | "unpause" | "kill";
@@ -4176,6 +4180,14 @@ export type DockerVolume = {
 	labels?: { [key in string]: string },
 };
 
+/**  Local changes accepted by the editor's shared document model. */
+export type DocumentChanged = {
+	path: string,
+	baseVersion: number,
+	version: number,
+	changes: DocumentTextChange[],
+};
+
 /**  Encoding and BOM currently applied to an open document. */
 export type DocumentEncoding = {
 	encoding: string,
@@ -4233,6 +4245,13 @@ export type DocumentLink = {
 	/**  Any other target (`https:`, …). */
 	url: string | null,
 	tooltip: string | null,
+};
+
+/**  One UTF-16 replacement in a locally edited editor document. */
+export type DocumentTextChange = {
+	from: number,
+	to: number,
+	insert: string,
 };
 
 export type DuplicateGroup = {
@@ -4296,6 +4315,12 @@ export type EditorAppearanceSettings = {
 	/**  Right margin and visual guides from Code Style. */
 	hardWrapGuides?: boolean,
 	intentionBulb?: boolean,
+	/**
+	 *  Draw doc comments (Javadoc, KDoc, JSDoc, rustdoc) as rendered documentation
+	 *  instead of their source, as IDEA's option of the same name. View › Active
+	 *  Editor › Render Documentation Comments overrides this for one editor.
+	 */
+	renderDocComments?: boolean,
 	/**  Distraction Free Mode: width of the centred text column, in characters. */
 	distractionFreeWidth?: number,
 };
@@ -4514,7 +4539,7 @@ export type ErrorKind = "notFound" | "alreadyExists" | "permissionDenied" | "inv
 "unavailable" | "io" | "protocol" | "internal";
 
 /**  Kinds of workbench events a plugin can subscribe to (`on-event:<kind>`). */
-export type EventKind = "websocket-ready" | "file-closed" | "settings-changed" | "input-mode-changed" | "run-exited" | "terminal-exited" | "content-tab-action" | "extensions-changed" | "file-opened" | "file-saved" | "files-changed" | "editor-focused" | "action-performed" | "vcs-changed" | "scheduled";
+export type EventKind = "document-changed" | "websocket-ready" | "file-closed" | "settings-changed" | "input-mode-changed" | "run-exited" | "terminal-exited" | "content-tab-action" | "extensions-changed" | "file-opened" | "file-saved" | "files-changed" | "editor-focused" | "action-performed" | "vcs-changed" | "scheduled";
 
 /**  An exception breakpoint filter offered by an adapter (`exceptionBreakpointFilters`). */
 export type ExceptionFilter = {
@@ -6620,6 +6645,20 @@ export type LogDetails = {
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+/**
+ *  Per-level colours for console log lines: a line whose level is detected
+ *  (`ERROR`, `WARN`, …) takes the level's colour; ANSI colours the program
+ *  prints itself win over it. Values are CSS colours, usually scheme tokens.
+ */
+export type LogLevelColors = {
+	enabled?: boolean,
+	error?: string,
+	warn?: string,
+	info?: string,
+	debug?: string,
+	trace?: string,
+};
+
 export type LogLocation = {
 	dir: IpcPath,
 	/**  Current log file, if one was written yet. */
@@ -6810,7 +6849,11 @@ export type MavenProject = {
 	profiles: string[],
 	/**  Java feature version the project compiles for (`maven.compiler.release`, `java.version`…). */
 	javaVersion: number | null,
-	/**  Maven launcher: the nearest `mvnw` up to the project root (absolute), else `mvn`. */
+	/**
+	 *  Maven launcher: the nearest `mvnw` (absolute), else `mvn`. Inside the opened
+	 *  project the search stops at its root; outside it, the search stops before
+	 *  that root so a linked project keeps its own wrapper.
+	 */
 	command: string,
 	/**  Options before the goals (`-s`, `-Dmaven.repo.local=`); filled in by the shell from settings. */
 	options: string[],
@@ -6824,7 +6867,11 @@ export type MavenSettings = {
 	runnerJre?: string,
 	/**  Project-relative root POMs removed from the Maven project model. */
 	unlinkedProjects?: string[],
-	/**  Project-relative POMs outside the root reactor added as independent top-level projects. */
+	/**
+	 *  POMs added as independent top-level projects. Inside the opened project the path is
+	 *  project-relative (`tools/pom.xml`); outside it, the canonical absolute path. Linking
+	 *  does not edit either POM.
+	 */
 	linkedProjects?: string[],
 	/**  Maven home (or its `mvn` executable); empty = the project's `mvnw`, else `mvn` on `PATH`. */
 	home?: string,
@@ -10136,7 +10183,7 @@ export type WindowTab = {
 };
 
 /**  A workbench event delivered to plugins. */
-export type WorkbenchEvent = { kind: "websocketReady"; value: WebsocketReady } | { kind: "runExited"; value: RunExited } | { kind: "terminalExited"; value: TerminalExited } | { kind: "contentTabAction"; value: ContentTabAction } | { kind: "fileClosed"; value: string } | { kind: "settingsChanged"; value: string[] } | 
+export type WorkbenchEvent = { kind: "documentChanged"; value: DocumentChanged } | { kind: "websocketReady"; value: WebsocketReady } | { kind: "runExited"; value: RunExited } | { kind: "terminalExited"; value: TerminalExited } | { kind: "contentTabAction"; value: ContentTabAction } | { kind: "fileClosed"; value: string } | { kind: "settingsChanged"; value: string[] } | 
 /**  Ids of extension points the receiving plugin declares whose contributions changed. */
 { kind: "extensionsChanged"; value: string[] } | { kind: "inputModeChanged"; value: InputMode } | { kind: "fileOpened"; value: string } | { kind: "fileSaved"; value: string } | { kind: "filesChanged"; value: FilesChanged } | { kind: "editorFocused"; value: string | null } | { kind: "actionPerformed"; value: ActionPerformed } | { kind: "vcsChanged"; value: string } | { kind: "scheduled" };
 
