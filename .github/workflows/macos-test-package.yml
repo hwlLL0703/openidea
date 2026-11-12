@@ -6,6 +6,10 @@ name: macOS test package
 # The overlay gives the bundle its own name and identifier, so its settings, data
 # and logs are not the installed app's. Plugin keychain items stay shared
 # (service ai.l0ng.openidea.plugin.<id>); do not change plugin secrets in the test app.
+#
+# Discoverable import: File › Project Structure… › Modules › Import Module from Existing Sources
+# (导入已有模块). Add Module Overrides stays an in-project settings action.
+# The Maven tool window plus button remains Add Maven Projects (添加 Maven 项目).
 on:
   workflow_dispatch:
   push:
